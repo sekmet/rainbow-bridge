@@ -267,7 +267,7 @@ class Near2EthRelay {
         }
         delay = Math.max(delay, minDelay)
         console.log(
-          `Client height is ${bridgeState.currentHeight}, chain height is ${lastBlock.inner_lite.height}. Sleeping for ${delay} seconds.`
+          `Last valid header on the client: ${bridgeState.currentHeight}. Waiting for block ${lastBlock.inner_lite.height} to become valid for ${delay} seconds.`
         )
         await sleep(1000 * delay)
       } catch (e) {
