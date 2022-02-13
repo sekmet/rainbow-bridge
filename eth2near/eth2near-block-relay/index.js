@@ -10,7 +10,8 @@ const {
 const {
   web3BlockToRlp,
   EthOnNearClientContract,
-  borshSchema
+  borshSchema,
+  getEthBlock
 } = require('./eth-on-near-client')
 const {
   EthOnNearProverContract
@@ -40,11 +41,48 @@ function ethashproof (command, _callback) {
   )
 }
 
+// This function find the result in O(log delta) where delta is the difference between estimatedPosition and the result.
+// In particular if estimatedPosition is the correct value it will make two calls to predicate, so it will behave in O(1) in this case.
+async function binarySearchWithEstimate (limitLo, limitHi, estimatedPosition, predicate) {
+  let lo = limitLo
+  let hi = limitHi
+  const value = await predicate(estimatedPosition)
+
+  if (value) {
+    hi = estimatedPosition
+    let step = 1
+    while (hi - step > lo && await predicate(hi - step)) {
+      step *= 2
+    }
+    hi -= Math.floor(step / 2)
+    lo = Math.max(lo, hi - step)
+  } else {
+    lo = estimatedPosition
+    let step = 1
+    while (lo + step < hi && !await predicate(lo + step)) {
+      step *= 2
+    }
+    lo += Math.floor(step / 2)
+    hi = Math.min(hi, lo + step)
+  }
+
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (await predicate(mid)) {
+      hi = mid
+    } else {
+      lo = mid
+    }
+  }
+  return hi
+}
+
 class Eth2NearRelay {
   initialize (ethClientContract, {
     ethNodeUrl,
     totalSubmitBlock,
     gasPerTransaction,
+    nearNetworkId,
     metricsPort
   }) {
     this.gasPerTransaction = new BN(gasPerTransaction)
@@ -58,6 +96,7 @@ class Eth2NearRelay {
       throw new Error(`total-submit-block must be ${limitSubmitBlock} or less. Currently it is: ${this.totalSubmitBlock}`)
     }
 
+    this.bridgeId = nearNetworkId
     this.ethClientContract = ethClientContract
     this.robustWeb3 = new RobustWeb3(ethNodeUrl)
     this.web3 = this.robustWeb3.web3
@@ -71,6 +110,8 @@ class Eth2NearRelay {
     const clientBlockNumberGauge = httpPrometheus.gauge('client_block_number', 'current client block number')
     const chainBlockNumberGauge = httpPrometheus.gauge('chain_block_number', 'current chain block number')
     const errorsOnSubmitCounter = httpPrometheus.counter('errors_on_submit', 'number of errors while submitting header')
+
+    let previousBlockNumber
 
     while (true) {
       let clientBlockNumber
@@ -89,28 +130,42 @@ class Eth2NearRelay {
         continue
       }
 
-      // Backtrack if chain switched the fork.
-      while (true) {
+      const predicate = async (value) => {
+        const blockNumber = clientBlockNumber - value
+        console.log('Checking block:', blockNumber)
         try {
-          const chainBlock = await robustWeb3.getBlock(clientBlockNumber)
+          const chainBlock = await getEthBlock(blockNumber, robustWeb3)
+
+          /// Block is not ready
+          if (chainBlock === null) {
+            const seconds = 3
+            console.log(`Block ${blockNumber} is not ready. Sleeping ${seconds} seconds.`)
+            await sleep(seconds * 1000)
+            return await predicate(value)
+          }
+
           const chainBlockHash = chainBlock.hash
           const clientHashes = await this.ethClientContract.known_hashes(
-            clientBlockNumber
+            blockNumber
           )
           if (clientHashes.find((x) => x === chainBlockHash)) {
-            break
+            return true
           } else {
-            console.log(
-              `Block ${chainBlockHash} height: ${clientBlockNumber} is not known to the client. Backtracking.`
-            )
-            clientBlockNumber -= 1
-            clientBlockNumberGauge.set(clientBlockNumber)
+            return false
           }
         } catch (e) {
           console.error(e)
-          continue
+          return await predicate(value)
         }
       }
+
+      const estimatedValued = (previousBlockNumber === undefined) ? 0 : clientBlockNumber - (previousBlockNumber + this.totalSubmitBlock)
+
+      /// In case there exist a fork, find how many steps should go backward (delta) to the first block
+      /// in the client that is also in the main chain. If the answer is 0, then the current head is valid
+      const delta = await binarySearchWithEstimate(0, clientBlockNumber, estimatedValued, predicate)
+      clientBlockNumber -= delta
+      previousBlockNumber = clientBlockNumber
 
       if (clientBlockNumber < chainBlockNumber) {
         try {
@@ -142,8 +197,7 @@ class Eth2NearRelay {
           const task = this.ethClientContract.account.signAndSendTransaction(this.ethClientContract.contractId, actions)
 
           console.log(
-            `Submit txn to add block ${
-              clientBlockNumber + 1
+            `Submit txn to add block ${clientBlockNumber + 1
             } to block ${endBlock}`
           )
 
@@ -164,7 +218,7 @@ class Eth2NearRelay {
 
   async getParseBlock (blockNumber) {
     try {
-      const block = await this.robustWeb3.getBlock(blockNumber)
+      const block = await getEthBlock(blockNumber, this.robustWeb3)
       const blockRlp = this.web3.utils.bytesToHex(
         web3BlockToRlp(block)
       )

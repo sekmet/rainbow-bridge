@@ -2,6 +2,7 @@ const fs = require('fs')
 const bs58 = require('bs58')
 const { toBuffer } = require('eth-util-lite')
 const { BN } = require('ethereumjs-util')
+const lodash = require('lodash')
 const {
   sleep,
   RobustWeb3,
@@ -18,7 +19,7 @@ class Near2EthRelay {
     nearNetworkId,
     ethNodeUrl,
     ethMasterSk,
-    ethClientAbiPath,
+    ethClientArtifactPath,
     ethClientAddress,
     ethGasMultiplier,
     metricsPort
@@ -44,9 +45,7 @@ class Near2EthRelay {
 
     // Declare Near2EthClient contract.
     this.clientContract = new this.web3.eth.Contract(
-      JSON.parse(
-        fs.readFileSync(ethClientAbiPath)
-      ),
+      JSON.parse(fs.readFileSync(ethClientArtifactPath)).abi,
       ethClientAddress,
       {
         from: this.ethMasterAccount,
@@ -72,7 +71,7 @@ class Near2EthRelay {
         // The finalized block is not immediately available so we wait for it to become available.
         let lightClientBlock = null
         let currentValidators = null
-        while (!lightClientBlock) {
+        while (lodash.isEmpty(lightClientBlock)) {
           currentValidators = await this.near.connection.provider.sendJsonRpc(
             'EXPERIMENTAL_validators_ordered',
             [lastFinalBlockHash]
@@ -85,9 +84,8 @@ class Near2EthRelay {
             'next_light_client_block',
             [lastFinalBlockHash]
           )
-          if (!lightClientBlock) {
+          if (lodash.isEmpty(lightClientBlock)) {
             await sleep(300)
-            continue
           }
         }
         console.log('Initializing with validators')
@@ -256,7 +254,7 @@ class Near2EthRelay {
 
             await clientContract.methods.addLightClientBlock(borshBlock).send({
               from: ethMasterAccount,
-              gas: 7000000,
+              gas: 10000000,
               handleRevert: true,
               gasPrice: gasPrice.mul(new BN(ethGasMultiplier))
             })
@@ -267,6 +265,7 @@ class Near2EthRelay {
             }
 
             console.log('Submitted.')
+            await sleep(240000) // To prevent submitting the same block again
             continue
           }
         }

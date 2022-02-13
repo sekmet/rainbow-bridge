@@ -1,7 +1,7 @@
 /// This module gives a few utils for robust error handling,
 /// and wrap web3 with error handling and retry
 const Web3 = require('web3')
-const _ = require('lodash')
+const lodash = require('lodash')
 const nearAPI = require('near-api-js')
 
 const RETRY = 10
@@ -91,9 +91,9 @@ class RobustWeb3 {
           this.web3.eth.sendTransaction(tx),
           SLOW_TX_ERROR_MSG
         )
-        if (_.isArray(receipt.logs)) {
+        if (lodash.isArray(receipt.logs)) {
           // decode logs
-          const events = _.map(receipt.logs, function (log) {
+          const events = lodash.map(receipt.logs, function (log) {
             return contract._decodeEventABI.call(
               {
                 name: 'ALLEVENTS',
@@ -134,7 +134,8 @@ class RobustWeb3 {
           )
           gasPrice *= 2
         } else if (
-          e.message.indexOf("the tx doesn't have the correct nonce") >= 0
+          e.message.indexOf("the tx doesn't have the correct nonce") >= 0 ||
+          e.message.indexOf('replacement transaction underpriced') >= 0
         ) {
           console.log('nonce error, retrying with new nonce')
           nonce++
@@ -240,7 +241,7 @@ const signAndSendTransaction = async (
       } else {
         const status = await account.connection.provider.status()
         let signedTx
-        ;[txHash, signedTx] = await nearAPI.transactions.signTransaction(
+          ;[txHash, signedTx] = await nearAPI.transactions.signTransaction(
           receiverId,
           ++accessKey.nonce,
           actions,

@@ -1,14 +1,13 @@
-pragma solidity ^0.6;
+// SPDX-License-Identifier: GPL-3.0-or-later
+pragma solidity ^0.8;
 
-import "@openzeppelin/contracts/math/SafeMath.sol";
-import "./bridge/AdminControlled.sol";
-import "./bridge/INearBridge.sol";
-import "./bridge/NearDecoder.sol";
+import "rainbow-bridge-sol/nearbridge/contracts/AdminControlled.sol";
+import "rainbow-bridge-sol/nearbridge/contracts/INearBridge.sol";
+import "rainbow-bridge-sol/nearbridge/contracts/NearDecoder.sol";
 import "./ProofDecoder.sol";
 import "./INearProver.sol";
 
 contract NearProver is INearProver, AdminControlled {
-    using SafeMath for uint256;
     using Borsh for Borsh.Data;
     using NearDecoder for Borsh.Data;
     using ProofDecoder for Borsh.Data;
@@ -19,7 +18,7 @@ contract NearProver is INearProver, AdminControlled {
         INearBridge _bridge,
         address _admin,
         uint _pausedFlags
-    ) public AdminControlled(_admin, _pausedFlags) {
+    ) AdminControlled(_admin, _pausedFlags) {
         bridge = _bridge;
     }
 
@@ -33,12 +32,14 @@ contract NearProver is INearProver, AdminControlled {
         pausable(PAUSED_VERIFY)
         returns (bool)
     {
-        Borsh.Data memory borshData = Borsh.from(proofData);
-        ProofDecoder.FullOutcomeProof memory fullOutcomeProof = borshData.decodeFullOutcomeProof();
-        require(borshData.finished(), "NearProver: argument should be exact borsh serialization");
+        Borsh.Data memory borsh = Borsh.from(proofData);
+        ProofDecoder.FullOutcomeProof memory fullOutcomeProof = borsh.decodeFullOutcomeProof();
+        borsh.done();
 
-        bytes32 hash =
-            _computeRoot(fullOutcomeProof.outcome_proof.outcome_with_id.hash, fullOutcomeProof.outcome_proof.proof);
+        bytes32 hash = _computeRoot(
+            fullOutcomeProof.outcome_proof.outcome_with_id.hash,
+            fullOutcomeProof.outcome_proof.proof
+        );
 
         hash = sha256(abi.encodePacked(hash));
 
